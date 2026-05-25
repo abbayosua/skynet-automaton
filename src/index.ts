@@ -10,10 +10,9 @@
 import fs from "fs";
 import path from "path";
 import { getWallet, getAutomatonDir } from "./identity/wallet.js";
-import { provision, loadApiKeyFromConfig } from "./identity/provision.js";
 import { loadConfig, resolvePath } from "./config.js";
 import { createDatabase } from "./state/database.js";
-import { createConwayClient } from "./conway/client.js";
+import { createStandaloneClient, topupStandaloneCredits } from "./conway/standalone.js";
 import { createInferenceClient } from "./conway/inference.js";
 import { createHeartbeatDaemon } from "./heartbeat/daemon.js";
 import {
@@ -33,9 +32,7 @@ import type { AutomatonIdentity, AgentState, Skill, SocialClientInterface } from
 import { DEFAULT_TREASURY_POLICY } from "./types.js";
 import { createLogger, setGlobalLogLevel, StructuredLogger } from "./observability/logger.js";
 import { prettySink } from "./observability/pretty-sink.js";
-import { bootstrapTopup } from "./conway/topup.js";
 import { randomUUID } from "crypto";
-import { keccak256, toHex } from "viem";
 
 const logger = createLogger("main");
 const VERSION = "0.2.1";
@@ -61,8 +58,8 @@ Usage:
   automaton --configure    Edit configuration (providers, model, treasury, general)
   automaton --pick-model   Interactively pick the active inference model
   automaton --init         Initialize wallet and config directory
-  automaton --provision    Provision Conway API key via SIWE
   automaton --status       Show current automaton status
+  automaton --topup N      Add $N to standalone balance (e.g., --topup 5)
   automaton --version      Show version
   automaton --help         Show this help
 
@@ -71,8 +68,9 @@ Environment:
   OPENAI_BASE_URL           Custom base URL for OpenAI-compatible inference
   ANTHROPIC_API_KEY         Anthropic API key (overrides config)
   OLLAMA_BASE_URL           Ollama base URL (overrides config, e.g. http://localhost:11434)
-  CONWAY_API_URL            Conway API URL (default: https://api.conway.tech)
-  CONWAY_API_KEY            Conway API key (overrides config)
+
+Note: This is a standalone fork. No Conway API required.
+      Set OPENAI_API_KEY + OPENAI_BASE_URL for inference.
 `);
     process.exit(0);
   }
@@ -99,18 +97,28 @@ Environment:
   }
 
   if (args.includes("--provision")) {
-    try {
-      const result = await provision();
-      logger.info(JSON.stringify(result));
-    } catch (err: any) {
-      logger.error(`Provision failed: ${err.message}`);
-      process.exit(1);
-    }
+    logger.info("Standalone mode: Conway API provisioning is not needed. Set OPENAI_API_KEY and OPENAI_BASE_URL env vars instead.");
     process.exit(0);
   }
 
   if (args.includes("--status")) {
     await showStatus();
+    process.exit(0);
+  }
+
+  if (args.includes("--topup")) {
+    const topupIdx = args.indexOf("--topup");
+    const amountUsd = parseFloat(args[topupIdx + 1]);
+    if (isNaN(amountUsd) || amountUsd <= 0) {
+      logger.error("Usage: automaton --topup <amount_usd> (e.g., --topup 5 for $5)");
+      process.exit(1);
+    }
+    const newBalance = topupStandaloneCredits(amountUsd);
+    if (newBalance === null) {
+      logger.error("Topup failed: could not write balance file");
+      process.exit(1);
+    }
+    logger.info(`Topup successful! +$${amountUsd.toFixed(2)} added. New balance: $${(newBalance / 100).toFixed(2)}`);
     process.exit(0);
   }
 
@@ -199,11 +207,6 @@ async function run(): Promise<void> {
   // Load wallet (chain-aware)
   const { account, chainIdentity, chainType: walletChainType } = await getWallet();
   const resolvedChainType = config.chainType || walletChainType || "evm";
-  const apiKey = config.conwayApiKey || loadApiKeyFromConfig();
-  if (!apiKey) {
-    logger.error("No API key found. Run: automaton --provision");
-    process.exit(1);
-  }
 
   // Initialize database
   const dbPath = resolvePath(config.dbPath);
@@ -223,7 +226,7 @@ async function run(): Promise<void> {
     account,
     creatorAddress: config.creatorAddress,
     sandboxId: config.sandboxId,
-    apiKey,
+    apiKey: "standalone",
     createdAt,
     chainType: resolvedChainType,
     chainIdentity,
@@ -241,62 +244,41 @@ async function run(): Promise<void> {
     db.setIdentity("automatonId", automatonId);
   }
 
-  // Create Conway client
-  const conway = createConwayClient({
-    apiUrl: config.conwayApiUrl,
-    apiKey,
-    sandboxId: config.sandboxId,
+  // Create standalone client (no Conway dependency)
+  const conway = createStandaloneClient({
+    automatonDir: getAutomatonDir(),
   });
 
-  // Register automaton identity (one-time, immutable)
-  const registrationState = db.getIdentity("conwayRegistrationStatus");
-  if (registrationState !== "registered") {
-    try {
-      const genesisPromptHash = config.genesisPrompt
-        ? keccak256(toHex(config.genesisPrompt))
-        : undefined;
-      await conway.registerAutomaton({
-        automatonId,
-        automatonAddress: chainIdentity.address,
-        creatorAddress: config.creatorAddress,
-        name: config.name,
-        bio: config.creatorMessage || "",
-        genesisPromptHash,
-        account,
-        chainType: resolvedChainType,
-        chainIdentity,
-      });
-      db.setIdentity("conwayRegistrationStatus", "registered");
-      logger.info(`[${new Date().toISOString()}] Automaton identity registered.`);
-    } catch (err: any) {
-      const status = err?.status;
-      if (status === 409) {
-        db.setIdentity("conwayRegistrationStatus", "conflict");
-        logger.warn(`[${new Date().toISOString()}] Automaton identity conflict: ${err.message}`);
-      } else {
-        db.setIdentity("conwayRegistrationStatus", "failed");
-        logger.warn(`[${new Date().toISOString()}] Automaton identity registration failed: ${err.message}`);
-      }
-    }
-  }
+  // Record identity registration as done (standalone = always registered)
+  db.setIdentity("conwayRegistrationStatus", "registered");
+  logger.info(`[${new Date().toISOString()}] Automaton identity registered.`);
+
+  // Resolve API keys: env var takes precedence over config
+  const openaiApiKey = process.env.OPENAI_API_KEY || config.openaiApiKey;
+  const anthropicApiKey = process.env.ANTHROPIC_API_KEY || config.anthropicApiKey;
 
   // Resolve Ollama base URL: env var takes precedence over config
   const ollamaBaseUrl = process.env.OLLAMA_BASE_URL || config.ollamaBaseUrl;
   // Resolve OpenAI-compatible base URL: env var takes precedence over config
-  const openaiBaseUrl = process.env.OPENAI_BASE_URL || config.openaiBaseUrl;
+  // Strip trailing /v1 if present — the inference client appends /v1 itself,
+  // so "/v1/v1/chat/completions" would 404 (e.g. OpenCode Go).
+  const rawOpenaiBaseUrl = process.env.OPENAI_BASE_URL || config.openaiBaseUrl;
+  const openaiBaseUrl = rawOpenaiBaseUrl
+    ? rawOpenaiBaseUrl.replace(/\/v1\/?$/, "")
+    : undefined;
 
   // Create inference client — pass a live registry lookup so model names like
   // "gpt-oss:120b" route to Ollama based on their registered provider, not heuristics.
   const modelRegistry = new ModelRegistry(db.raw);
   modelRegistry.initialize();
   const inference = createInferenceClient({
-    apiUrl: config.conwayApiUrl,
-    apiKey,
+    apiUrl: openaiBaseUrl || config.conwayApiUrl || "http://localhost:11434",
+    apiKey: openaiApiKey || "standalone",
     defaultModel: config.inferenceModel,
     maxTokens: config.maxTokensPerTurn,
     lowComputeModel: config.modelStrategy?.lowComputeModel || "gpt-5-mini",
-    openaiApiKey: config.openaiApiKey,
-    anthropicApiKey: config.anthropicApiKey,
+    openaiApiKey: openaiApiKey,
+    anthropicApiKey: anthropicApiKey,
     ollamaBaseUrl,
     openaiBaseUrl,
     getModelProvider: (modelId) => modelRegistry.get(modelId)?.provider,
@@ -342,37 +324,7 @@ async function run(): Promise<void> {
     logger.warn(`[${new Date().toISOString()}] State repo init failed: ${err.message}`);
   }
 
-  // Bootstrap topup: buy minimum credits ($5) from USDC so the agent can start.
-  // The agent decides larger topups itself via the topup_credits tool.
-  try {
-    let bootstrapTimer: ReturnType<typeof setTimeout>;
-    const bootstrapTimeout = new Promise<null>((_, reject) => {
-      bootstrapTimer = setTimeout(() => reject(new Error("bootstrap topup timed out")), 15_000);
-    });
-    try {
-      await Promise.race([
-        (async () => {
-          const creditsCents = await conway.getCreditsBalance().catch(() => 0);
-          const topupResult = await bootstrapTopup({
-            apiUrl: config.conwayApiUrl,
-            account,
-            creditsCents,
-            chainType: resolvedChainType,
-          });
-          if (topupResult?.success) {
-            logger.info(
-              `[${new Date().toISOString()}] Bootstrap topup: +$${topupResult.amountUsd} credits from USDC`,
-            );
-          }
-        })(),
-        bootstrapTimeout,
-      ]);
-    } finally {
-      clearTimeout(bootstrapTimer!);
-    }
-  } catch (err: any) {
-    logger.warn(`[${new Date().toISOString()}] Bootstrap topup skipped: ${err.message}`);
-  }
+  // Note: Bootstrap topup skipped — standalone mode has unlimited credits.
 
   // Start heartbeat daemon (Phase 1.1: DurableScheduler)
   const heartbeat = createHeartbeatDaemon({

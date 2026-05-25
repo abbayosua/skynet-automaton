@@ -69,6 +69,7 @@ export function createInferenceClient(
       openaiApiKey,
       anthropicApiKey,
       ollamaBaseUrl,
+      openaiBaseUrl,
       getModelProvider,
     });
 
@@ -166,6 +167,10 @@ function formatMessage(
   if (msg.name) formatted.name = msg.name;
   if (msg.tool_calls) formatted.tool_calls = msg.tool_calls;
   if (msg.tool_call_id) formatted.tool_call_id = msg.tool_call_id;
+  // Reasoning models (DeepSeek R1, etc.) require reasoning_content to be
+  // passed back in subsequent requests, otherwise the API rejects with 400.
+  const rc = (msg as any).reasoning_content;
+  if (rc) formatted.reasoning_content = rc;
 
   return formatted;
 }
@@ -181,6 +186,7 @@ function resolveInferenceBackend(
     openaiApiKey?: string;
     anthropicApiKey?: string;
     ollamaBaseUrl?: string;
+    openaiBaseUrl?: string;
     getModelProvider?: (modelId: string) => string | undefined;
   },
 ): InferenceBackend {
@@ -196,7 +202,10 @@ function resolveInferenceBackend(
 
   // Heuristic fallback (model not in registry yet)
   if (keys.anthropicApiKey && /^claude/i.test(model)) return "anthropic";
-  if (keys.openaiApiKey && /^(gpt-[3-9]|gpt-4|gpt-5|o[1-9][-\s.]|o[1-9]$|chatgpt)/i.test(model)) return "openai";
+  if (keys.openaiApiKey && /^(gpt-[3-9]|gpt-4|gpt-5|o[1-9][-\\s.]|o[1-9]$|chatgpt)/i.test(model)) return "openai";
+  // If an OpenAI-compatible base URL is configured, route unknown models there
+  // instead of falling back to Conway (standalone mode, custom backends).
+  if (keys.openaiBaseUrl) return "openai";
   return "conway";
 
 }
@@ -258,7 +267,8 @@ async function chatViaOpenAiCompatible(params: {
     model: data.model || params.model,
     message: {
       role: message.role,
-      content: message.content || "",
+      content: message.content || message.reasoning_content || "",
+      reasoning_content: message.reasoning_content,
       tool_calls: toolCalls,
     },
     toolCalls,

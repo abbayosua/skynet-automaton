@@ -317,6 +317,7 @@ export interface ChatMessage {
   name?: string;
   tool_calls?: InferenceToolCall[];
   tool_call_id?: string;
+  reasoning_content?: string;
 }
 
 export interface InferenceToolCall {

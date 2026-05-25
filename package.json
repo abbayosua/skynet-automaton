@@ -25,9 +25,9 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/Conway-Research/automaton.git"
+    "url": "https://github.com/abbayosua/skynet-automaton.git"
   },
-  "homepage": "https://conway.tech",
+  "homepage": "https://github.com/abbayosua/skynet-automaton",
   "keywords": [
     "autonomous-agent",
     "sovereign-ai",

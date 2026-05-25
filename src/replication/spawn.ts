@@ -129,7 +129,7 @@ export async function spawnChild(
     // Install runtime (on the CHILD sandbox)
     await childConway.exec("apt-get update -qq && apt-get install -y -qq nodejs npm git curl", 120_000);
     await childConway.exec(
-      "git clone https://github.com/Conway-Research/automaton.git /root/automaton && cd /root/automaton && npm install && npm run build",
+      "git clone https://github.com/abbayosua/skynet-automaton.git /root/automaton && cd /root/automaton && npm install && npm run build",
       180_000,
     );
 
@@ -269,7 +269,7 @@ async function spawnChildLegacy(
       120_000,
     );
     await childConway.exec(
-      "git clone https://github.com/Conway-Research/automaton.git /root/automaton && cd /root/automaton && npm install && npm run build",
+      "git clone https://github.com/abbayosua/skynet-automaton.git /root/automaton && cd /root/automaton && npm install && npm run build",
       180_000,
     );
     await childConway.exec("mkdir -p /root/.automaton", 10_000);

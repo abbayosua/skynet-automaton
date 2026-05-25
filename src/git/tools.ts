@@ -2,10 +2,19 @@
  * Git Tools
  *
  * Built-in git operations for the automaton.
- * Used for both state versioning and code development.
+ * Uses `git -C <path>` instead of `cd <path> && git` for cross-platform
+ * compatibility (Windows paths handled natively by git).
  */
 
 import type { ConwayClient, GitStatus, GitLogEntry } from "../types.js";
+
+/**
+ * Safely quote a path for -C argument. git -C handles native paths
+ * (C:\... on Windows, /path on Unix) directly — no shell cd needed.
+ */
+function quotePath(path: string): string {
+  return `"${path.replace(/"/g, '\\"')}"`;
+}
 
 /**
  * Get git status for a repository.
@@ -15,7 +24,7 @@ export async function gitStatus(
   repoPath: string,
 ): Promise<GitStatus> {
   const result = await conway.exec(
-    `cd ${escapeShellArg(repoPath)} && git status --porcelain -b 2>/dev/null`,
+    `git -C ${quotePath(repoPath)} status --porcelain -b 2>/dev/null`,
     10000,
   );
 
@@ -65,7 +74,7 @@ export async function gitDiff(
 ): Promise<string> {
   const flag = staged ? "--cached" : "";
   const result = await conway.exec(
-    `cd ${escapeShellArg(repoPath)} && git diff ${flag} 2>/dev/null`,
+    `git -C ${quotePath(repoPath)} diff ${flag} 2>/dev/null`,
     10000,
   );
   return result.stdout || "(no changes)";
@@ -81,11 +90,11 @@ export async function gitCommit(
   addAll: boolean = true,
 ): Promise<string> {
   if (addAll) {
-    await conway.exec(`cd ${escapeShellArg(repoPath)} && git add -A`, 10000);
+    await conway.exec(`git -C ${quotePath(repoPath)} add -A`, 10000);
   }
 
   const result = await conway.exec(
-    `cd ${escapeShellArg(repoPath)} && git commit -m ${escapeShellArg(message)} --allow-empty 2>&1`,
+    `git -C ${quotePath(repoPath)} commit -m "${message.replace(/"/g, '\\"')}" --allow-empty 2>&1`,
     10000,
   );
 
@@ -106,7 +115,7 @@ export async function gitLog(
 ): Promise<GitLogEntry[]> {
   const safeLimit = Math.max(1, Math.floor(Number(limit))) || 10;
   const result = await conway.exec(
-    `cd ${escapeShellArg(repoPath)} && git log --format="%H|%s|%an|%ai" -n ${safeLimit} 2>/dev/null`,
+    `git -C ${quotePath(repoPath)} log --format="%H|%s|%an|%ai" -n ${safeLimit} 2>/dev/null`,
     10000,
   );
 
@@ -130,9 +139,9 @@ export async function gitPush(
   remote: string = "origin",
   branch?: string,
 ): Promise<string> {
-  const branchArg = branch ? ` ${escapeShellArg(branch)}` : "";
+  const branchArg = branch ? ` "${branch}"` : "";
   const result = await conway.exec(
-    `cd ${escapeShellArg(repoPath)} && git push ${escapeShellArg(remote)}${branchArg} 2>&1`,
+    `git -C ${quotePath(repoPath)} push "${remote}"${branchArg} 2>&1`,
     30000,
   );
 
@@ -156,19 +165,19 @@ export async function gitBranch(
 
   switch (action) {
     case "list":
-      cmd = `cd ${escapeShellArg(repoPath)} && git branch -a 2>/dev/null`;
+      cmd = `git -C ${quotePath(repoPath)} branch -a 2>/dev/null`;
       break;
     case "create":
       if (!branchName) throw new Error("Branch name required");
-      cmd = `cd ${escapeShellArg(repoPath)} && git checkout -b ${escapeShellArg(branchName)} 2>&1`;
+      cmd = `git -C ${quotePath(repoPath)} checkout -b "${branchName}" 2>&1`;
       break;
     case "checkout":
       if (!branchName) throw new Error("Branch name required");
-      cmd = `cd ${escapeShellArg(repoPath)} && git checkout ${escapeShellArg(branchName)} 2>&1`;
+      cmd = `git -C ${quotePath(repoPath)} checkout "${branchName}" 2>&1`;
       break;
     case "delete":
       if (!branchName) throw new Error("Branch name required");
-      cmd = `cd ${escapeShellArg(repoPath)} && git branch -d ${escapeShellArg(branchName)} 2>&1`;
+      cmd = `git -C ${quotePath(repoPath)} branch -d "${branchName}" 2>&1`;
       break;
     default:
       throw new Error(`Unknown branch action: ${action}`);
@@ -191,7 +200,7 @@ export async function gitClone(
     ? ` --depth ${Math.max(1, Math.floor(Number(depth)))}`
     : "";
   const result = await conway.exec(
-    `git clone${depthArg} ${escapeShellArg(url)} ${escapeShellArg(targetPath)} 2>&1`,
+    `git clone${depthArg} "${url}" "${targetPath}" 2>&1`,
     120000,
   );
 
@@ -210,12 +219,8 @@ export async function gitInit(
   repoPath: string,
 ): Promise<string> {
   const result = await conway.exec(
-    `cd ${escapeShellArg(repoPath)} && git init 2>&1`,
+    `git -C ${quotePath(repoPath)} init 2>&1`,
     10000,
   );
   return result.stdout || "Git initialized";
-}
-
-function escapeShellArg(arg: string): string {
-  return `'${arg.replace(/'/g, "'\\''")}'`;
 }

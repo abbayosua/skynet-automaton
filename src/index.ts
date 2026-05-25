@@ -9,7 +9,7 @@
 
 import fs from "fs";
 import path from "path";
-import { getWallet, getAutomatonDir } from "./identity/wallet.js";
+import { getWallet, getWalletAddress, getAutomatonDir } from "./identity/wallet.js";
 import { loadConfig, resolvePath } from "./config.js";
 import { createDatabase } from "./state/database.js";
 import { createStandaloneClient, topupStandaloneCredits } from "./conway/standalone.js";
@@ -59,6 +59,7 @@ Usage:
   automaton --pick-model   Interactively pick the active inference model
   automaton --init         Initialize wallet and config directory
   automaton --status       Show current automaton status
+  automaton --wallet       Show wallet address and USDC balance
   automaton --topup N      Add $N to standalone balance (e.g., --topup 5)
   automaton --version      Show version
   automaton --help         Show this help
@@ -103,6 +104,11 @@ Note: This is a standalone fork. No Conway API required.
 
   if (args.includes("--status")) {
     await showStatus();
+    process.exit(0);
+  }
+
+  if (args.includes("--wallet")) {
+    await showWallet();
     process.exit(0);
   }
 
@@ -171,10 +177,24 @@ async function showStatus(): Promise<void> {
   const children = db.getChildren();
   const registry = db.getRegistryEntry();
 
+  // Try to fetch USDC balance
+  let usdcBalance = "N/A (no RPC)";
+  try {
+    const { getUsdcBalance } = await import("./conway/x402.js");
+    const addr = getWalletAddress();
+    if (addr) {
+      const bal = await getUsdcBalance(addr, "eip155:8453");
+      usdcBalance = `${bal.toFixed(6)} USDC`;
+    }
+  } catch {
+    usdcBalance = "N/A (check failed)";
+  }
+
   logger.info(`
 === AUTOMATON STATUS ===
 Name:       ${config.name}
-Address:    ${config.walletAddress}
+Wallet:     ${config.walletAddress}
+USDC:       ${usdcBalance}
 Creator:    ${config.creatorAddress}
 Sandbox:    ${config.sandboxId}
 State:      ${state}
@@ -190,6 +210,57 @@ Version:    ${config.version}
 `);
 
   db.close();
+}
+
+// ─── Wallet Command ─────────────────────────────────────────────
+
+async function showWallet(): Promise<void> {
+  const addr = getWalletAddress();
+  if (!addr) {
+    logger.info("No wallet found. Run 'automaton --init' first.");
+    return;
+  }
+
+  // Get USDC balance
+  let usdcBalance = "N/A";
+  let ethBalance = "N/A";
+  let network = "Base";
+  try {
+    const { getUsdcBalance, getUsdcBalanceDetailed } = await import("./conway/x402.js");
+    const usdc = await getUsdcBalance(addr, "eip155:8453");
+    usdcBalance = `${usdc.toFixed(6)} USDC`;
+
+    // Also check ETH balance for gas
+    const { createPublicClient, http, formatEther } = await import("viem");
+    const { base } = await import("viem/chains");
+    const client = createPublicClient({ chain: base, transport: http() });
+    const eth = await client.getBalance({ address: addr as `0x${string}` });
+    ethBalance = `${parseFloat(formatEther(eth)).toFixed(6)} ETH`;
+  } catch {
+    usdcBalance = "N/A (set AUTOMATON_RPC_URL)";
+    ethBalance = "N/A";
+  }
+
+  const explorerUrl = `https://basescan.org/address/${addr}`;
+  const ethExplorerUrl = `https://basescan.org/address/${addr}`;
+
+  logger.info(`
+╔══════════════════════════════════════════════╗
+║           SKYNET AUTOMATON WALLET            ║
+╠══════════════════════════════════════════════╣
+║  Network:  ${network.padEnd(34)}║
+║  Address:  ${addr.slice(0, 42)}║
+║  USDC:     ${(usdcBalance + " ").padEnd(34)}║
+║  ETH:      ${(ethBalance + " ").padEnd(34)}║
+║                                              ║
+║  Explorer: ${explorerUrl.slice(0, 38)}... ║
+║                                              ║
+║  Send USDC on Base network to this           ║
+║  address to fund the automaton.              ║
+║  A tiny amount of ETH is also needed         ║
+║  for gas (to pay for x402 transactions).     ║
+╚══════════════════════════════════════════════╝
+`);
 }
 
 // ─── Main Run ──────────────────────────────────────────────────
@@ -252,6 +323,19 @@ async function run(): Promise<void> {
   // Record identity registration as done (standalone = always registered)
   db.setIdentity("conwayRegistrationStatus", "registered");
   logger.info(`[${new Date().toISOString()}] Automaton identity registered.`);
+
+  // Display wallet info at startup
+  logger.info(`
+╔══════════════════════════════════════════════╗
+║            AUTOMATON WALLET ADDRESS           ║
+╠══════════════════════════════════════════════╣
+║  ${chainIdentity.address.padEnd(44)}║
+║                                              ║
+║  Send USDC on Base network to this address   ║
+║  to fund the automaton.                      ║
+║  Use --wallet to check balance.              ║
+╚══════════════════════════════════════════════╝
+  `.trim());
 
   // Resolve API keys: env var takes precedence over config
   const openaiApiKey = process.env.OPENAI_API_KEY || config.openaiApiKey;

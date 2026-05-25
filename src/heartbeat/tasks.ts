@@ -149,6 +149,11 @@ export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
     // Use ctx.usdcBalance instead of calling getUsdcBalance()
     const balance = ctx.usdcBalance;
     const credits = ctx.creditBalance;
+    const prevCheckRaw = taskCtx.db.getKV("last_usdc_check");
+    let prevBalance = -1;
+    if (prevCheckRaw) {
+      try { prevBalance = JSON.parse(prevCheckRaw).balance; } catch {}
+    }
 
     taskCtx.db.setKV("last_usdc_check", JSON.stringify({
       balance,
@@ -156,6 +161,32 @@ export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
       timestamp: new Date().toISOString(),
     }));
 
+    // ─── Deposit Detection ──────────────────────────────────────
+    // If USDC balance increased since last check, someone sent money!
+    if (prevBalance >= 0 && balance > prevBalance) {
+      const depositAmount = balance - prevBalance;
+      logger.info(
+        `💰 USDC deposit detected: +$${depositAmount.toFixed(2)} (new balance: $${balance.toFixed(2)})`,
+      );
+      // Persist the deposit event
+      const depositRecord = {
+        amountUsd: depositAmount,
+        balanceBefore: prevBalance,
+        balanceAfter: balance,
+        detectedAt: new Date().toISOString(),
+      };
+      const deposits = JSON.parse(taskCtx.db.getKV("usdc_deposits") || "[]");
+      deposits.push(depositRecord);
+      taskCtx.db.setKV("usdc_deposits", JSON.stringify(deposits.slice(-50)));
+
+      // Store as a wake event so the agent sees it
+      return {
+        shouldWake: true,
+        message: `💰 USDC deposit detected: +$${depositAmount.toFixed(2)} USDC! New balance: $${balance.toFixed(2)}. The automaton has received funding.`,
+      };
+    }
+
+    // ─── Auto-topup (Conway API mode) ───────────────────────────
     const MIN_TOPUP_USD = 5;
     if (balance >= MIN_TOPUP_USD && (ctx.survivalTier === "critical" || ctx.survivalTier === "dead")) {
       // Cooldown: don't attempt more than once every 5 minutes to avoid
@@ -167,6 +198,14 @@ export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
       }
 
       taskCtx.db.setKV("last_auto_topup_attempt", new Date().toISOString());
+
+      // In standalone mode, there's no Conway API to topup from — just wake the agent
+      if (!taskCtx.config.conwayApiUrl || taskCtx.config.conwayApiUrl === "https://api.conway.tech") {
+        return {
+          shouldWake: true,
+          message: `💰 USDC available ($${balance.toFixed(2)}) but auto-topup requires Conway API. In standalone mode, use 'automaton --topup <amount>' to add credits.`,
+        };
+      }
 
       const { bootstrapTopup } = await import("../conway/topup.js");
       const result = await bootstrapTopup({

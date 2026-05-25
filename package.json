@@ -1,7 +1,7 @@
 {
-  "name": "@conway/automaton",
-  "version": "0.2.1",
-  "description": "Conway Automaton - Sovereign AI Agent Runtime",
+  "name": "skynet-automaton",
+  "version": "0.2.1-skynet",
+  "description": "Skynet Automaton - Self-Improving, Self-Replicating AI Agent Runtime (forked from Conway Automaton)",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

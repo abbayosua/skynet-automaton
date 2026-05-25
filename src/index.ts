@@ -46,14 +46,14 @@ async function main(): Promise<void> {
   // ─── CLI Commands ────────────────────────────────────────────
 
   if (args.includes("--version") || args.includes("-v")) {
-    logger.info(`Conway Automaton v${VERSION}`);
+    logger.info(`Skynet Automaton v${VERSION}`);
     process.exit(0);
   }
 
   if (args.includes("--help") || args.includes("-h")) {
     logger.info(`
-Conway Automaton v${VERSION}
-Sovereign AI Agent Runtime
+Skynet Automaton v${VERSION}
+Self-Improving, Self-Replicating AI Agent Runtime (forked from Conway Automaton)
 
 Usage:
   automaton --run          Start the automaton (first run triggers setup wizard)
@@ -67,9 +67,12 @@ Usage:
   automaton --help         Show this help
 
 Environment:
-  CONWAY_API_URL           Conway API URL (default: https://api.conway.tech)
-  CONWAY_API_KEY           Conway API key (overrides config)
-  OLLAMA_BASE_URL          Ollama base URL (overrides config, e.g. http://localhost:11434)
+  OPENAI_API_KEY            OpenAI-compatible API key (OpenCode Go, OpenAI, etc.)
+  OPENAI_BASE_URL           Custom base URL for OpenAI-compatible inference
+  ANTHROPIC_API_KEY         Anthropic API key (overrides config)
+  OLLAMA_BASE_URL           Ollama base URL (overrides config, e.g. http://localhost:11434)
+  CONWAY_API_URL            Conway API URL (default: https://api.conway.tech)
+  CONWAY_API_KEY            Conway API key (overrides config)
 `);
     process.exit(0);
   }
@@ -184,7 +187,7 @@ Version:    ${config.version}
 // ─── Main Run ──────────────────────────────────────────────────
 
 async function run(): Promise<void> {
-  logger.info(`[${new Date().toISOString()}] Conway Automaton v${VERSION} starting...`);
+    logger.info(`[${new Date().toISOString()}] Skynet Automaton v${VERSION} starting...`);
 
   // Load config — first run triggers interactive setup wizard
   let config = loadConfig();

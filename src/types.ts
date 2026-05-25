@@ -52,6 +52,8 @@ export interface AutomatonConfig {
   openaiApiKey?: string;
   anthropicApiKey?: string;
   ollamaBaseUrl?: string;
+  /** Custom base URL for OpenAI-compatible inference (e.g., OpenCode Go) */
+  openaiBaseUrl?: string;
   inferenceModel: string;
   maxTokensPerTurn: number;
   heartbeatConfigPath: string;

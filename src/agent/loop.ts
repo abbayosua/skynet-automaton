@@ -430,10 +430,10 @@ export async function runAgentLoop(
 
       // Check survival tier
       // api_unreachable: creditsCents === -1 means API failed with no cache.
-      // Do NOT kill the agent; continue in low-compute mode and retry next tick.
+      // In standalone mode (no Conway), default to normal tier — never downgrade.
       if (financial.creditsCents === -1) {
-        log(config, "[API_UNREACHABLE] Balance API unreachable, continuing in low-compute mode.");
-        inference.setLowComputeMode(true);
+        log(config, "[API_UNREACHABLE] Conway unavailable — continuing in normal mode with default model.");
+        inference.setLowComputeMode(false);
       } else {
         const tier = getSurvivalTier(financial.creditsCents);
 

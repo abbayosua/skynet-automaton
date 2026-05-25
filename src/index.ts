@@ -32,6 +32,7 @@ import type { AutomatonIdentity, AgentState, Skill, SocialClientInterface } from
 import { DEFAULT_TREASURY_POLICY } from "./types.js";
 import { createLogger, setGlobalLogLevel, StructuredLogger } from "./observability/logger.js";
 import { prettySink } from "./observability/pretty-sink.js";
+import { startDashboard, pushLog } from "./dashboard/server.js";
 import { randomUUID } from "crypto";
 
 const logger = createLogger("main");
@@ -147,7 +148,12 @@ Note: This is a standalone fork. No Conway API required.
   }
 
   if (args.includes("--run")) {
-    StructuredLogger.setSink(prettySink);
+    // Set up pretty logging + dashboard capture
+    StructuredLogger.setSink((entry) => {
+      prettySink(entry);
+      const line = `[${entry.timestamp?.slice(11, 19) || ""}] [${entry.level}] [${entry.module}] ${entry.message}`;
+      pushLog(line);
+    });
     await run();
     return;
   }
@@ -336,6 +342,18 @@ async function run(): Promise<void> {
 ║  Use --wallet to check balance.              ║
 ╚══════════════════════════════════════════════╝
   `.trim());
+
+  // Start dashboard server
+  const DASHBOARD_PORT = 8080;
+  try {
+    const dashboardServer = startDashboard(DASHBOARD_PORT);
+    logger.info(`[${new Date().toISOString()}] Dashboard: http://localhost:${DASHBOARD_PORT}`);
+
+    // Expose via localhost.run if available
+    startLocalhostTunnel(DASHBOARD_PORT);
+  } catch (err: any) {
+    logger.warn(`[${new Date().toISOString()}] Dashboard server failed: ${err.message}`);
+  }
 
   // Resolve API keys: env var takes precedence over config
   const openaiApiKey = process.env.OPENAI_API_KEY || config.openaiApiKey;
@@ -531,6 +549,30 @@ async function run(): Promise<void> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ─── Public Tunnel ─────────────────────────────────────────────
+
+function startLocalhostTunnel(port: number): void {
+  const { execSync } = require("child_process");
+  try {
+    const result = execSync(
+      `ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -R 80:localhost:${port} nokey@localhost.run 2>&1`,
+      { timeout: 8000, encoding: "utf-8" },
+    );
+    const match = result.match(/https:\/\/[^\s]+/);
+    if (match) {
+      logger.info(`🌐 Public URL: ${match[0]}`);
+    }
+  } catch (err: any) {
+    const output = err.stdout || err.stderr || err.message || "";
+    const match = output.match(/https:\/\/[^\s]+/);
+    if (match) {
+      logger.info(`🌐 Public URL: ${match[0]}`);
+    } else {
+      logger.warn(`🌐 Tunnel unavailable (localhost.run not reachable). Dashboard only on http://localhost:${port}`);
+    }
+  }
 }
 
 // ─── Entry Point ───────────────────────────────────────────────
